@@ -9,7 +9,7 @@ SHELL := /bin/bash
 # openblas pkg-config). Otherwise, or if that build fails, the prebuilt NumPy wheel
 # (which bundles its own OpenBLAS) is used. NUMPY_SOURCE=yes forces the source build
 # (no fallback), NUMPY_SOURCE=no forces the wheel.
-VENV ?= venv
+VENV ?= .venv
 PYTHON ?= python3
 NUMPY_SOURCE ?= auto
 NUMPY_FLAGS := -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas -Csetup-args=-Dcpu-baseline=native
@@ -49,9 +49,9 @@ llama-models:
 	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo second-state/All-MiniLM-L6-v2-Embedding-GGUF --quant f16
 	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo unsloth/gemma-4-E2B-it-qat-GGUF --quant UD-Q4_K_XL
 llama-up:
-	cd $(LLAMA_DIR) && docker compose $(foreach p,$(PROFILE),--profile $(p)) up -d
+	cd $(LLAMA_DIR) && docker-compose $(foreach p,$(PROFILE),--profile $(p)) up -d
 llama-down:
-	cd $(LLAMA_DIR) && docker compose --profile gpu --profile cpu --profile webui down
+	cd $(LLAMA_DIR) && docker-compose --profile gpu --profile cpu --profile webui down
 llama-check:
 	$(VENV)/bin/python $(LLAMA_DIR)/check_embed.py
 	$(VENV)/bin/python $(LLAMA_DIR)/check_embed.py --mini
