@@ -9,7 +9,7 @@ SHELL := /bin/bash
 # openblas pkg-config). Otherwise, or if that build fails, the prebuilt NumPy wheel
 # (which bundles its own OpenBLAS) is used. NUMPY_SOURCE=yes forces the source build
 # (no fallback), NUMPY_SOURCE=no forces the wheel.
-VENV ?= venv
+VENV ?= .venv
 PYTHON ?= python3
 NUMPY_SOURCE ?= auto
 NUMPY_FLAGS := -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas -Csetup-args=-Dcpu-baseline=native
@@ -37,24 +37,21 @@ venv:
 	else \
 		$(VENV)/bin/pip install "$$req"; \
 	fi
-	@$(VENV)/bin/pip install .; rc=$$?; rm -rf build *.egg-info; exit $$rc
+	@$(VENV)/bin/pip install .; rc=$$?; rm -rf build aas.egg-info; exit $$rc
 	$(VENV)/bin/python -c "import numpy as np; b = np.show_config(mode='dicts')['Build Dependencies']['blas']; print('NumPy', np.__version__, 'BLAS:', b['name'], b['version'], b.get('lib directory', ''))"
 
 
-# llama-swap + llama.cpp for the labs (see notebooks/01-spam/llama/README.md). The "unified" llama-swap images match the GPU:
-# PROFILE = cuda13 | cuda | vulkan | cpu, detected by detect_gpu.sh (override: make llama-up PROFILE=cpu). WEBUI=yes adds Open WebUI.
+# llama-swap + llama.cpp for the labs (see notebooks/01-spam/llama/README.md). PROFILE = gpu (Vulkan, default) | cpu | "gpu webui" (adds Open WebUI).
 LLAMA_DIR := notebooks/01-spam/llama
-PROFILE ?= $(shell $(LLAMA_DIR)/detect_gpu.sh 2>/dev/null)
-WEBUI ?= no
+PROFILE ?= gpu
 llama-models:
 	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py
-	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo second-state/All-MiniLM-L6-v2-Embedding-GGUF --quant Q4_K_M
+	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo second-state/All-MiniLM-L6-v2-Embedding-GGUF --quant f16
 	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo unsloth/gemma-4-E2B-it-qat-GGUF --quant UD-Q4_K_XL
 llama-up:
-	@echo "llama-swap profile: $(PROFILE)"
-	cd $(LLAMA_DIR) && docker compose --profile $(PROFILE) $(if $(filter yes,$(WEBUI)),--profile webui) up -d
+	cd $(LLAMA_DIR) && docker-compose $(foreach p,$(PROFILE),--profile $(p)) up -d
 llama-down:
-	cd $(LLAMA_DIR) && docker compose --profile cuda13 --profile cuda --profile vulkan --profile cpu --profile webui down
+	cd $(LLAMA_DIR) && docker-compose --profile gpu --profile cpu --profile webui down
 llama-check:
 	$(VENV)/bin/python $(LLAMA_DIR)/check_embed.py
 	$(VENV)/bin/python $(LLAMA_DIR)/check_embed.py --mini
@@ -86,4 +83,4 @@ all clean:
 	echo ""; \
 	tput cnorm || true; \
 	echo "Done."
-	@rm -rf build *.egg-info
+	@if [ "$@" = clean ]; then rm -rf build aas.egg-info; fi
