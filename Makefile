@@ -51,16 +51,9 @@ llama-models:
 	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo second-state/All-MiniLM-L6-v2-Embedding-GGUF --quant Q4_K_M
 	$(VENV)/bin/python $(LLAMA_DIR)/download_model.py --repo unsloth/gemma-4-E2B-it-qat-GGUF --quant UD-Q4_K_XL
 llama-up:
-<<<<<<< HEAD
 	cd $(LLAMA_DIR) && docker-compose $(foreach p,$(PROFILE),--profile $(p)) up -d
 llama-down:
 	cd $(LLAMA_DIR) && docker-compose --profile gpu --profile cpu --profile webui down
-=======
-	@echo "llama-swap profile: $(PROFILE)"
-	cd $(LLAMA_DIR) && docker compose --profile $(PROFILE) $(if $(filter yes,$(WEBUI)),--profile webui) up -d
-llama-down:
-	cd $(LLAMA_DIR) && docker compose --profile cuda13 --profile cuda --profile vulkan --profile cpu --profile webui down
->>>>>>> 6467499893d9c0f4386dc5af50bb31f993a2b7b8
 llama-check:
 	$(VENV)/bin/python $(LLAMA_DIR)/check_embed.py
 	$(VENV)/bin/python $(LLAMA_DIR)/check_embed.py --mini
