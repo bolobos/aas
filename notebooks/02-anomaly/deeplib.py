@@ -7,45 +7,48 @@ import os
 
 os.environ.setdefault("KERAS_BACKEND", "jax")  # before importing keras
 
+import sys
+from pathlib import Path
+
 import keras
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))  # generic libs of the repository
 from anomlib import DATA, Detector
+from autoenc import build_autoencoder, fit_autoencoder, reconstruction_error
 
 
 # ------------------------------------------------------------------------------------------------ dense autoencoders
-def dense_ae(n_in: int, latent: int = 8, hidden: int = 32, l1: float = 0.0) -> keras.Model:
-    """Encoder n_in -> hidden -> latent, decoder latent -> hidden -> n_in. `l1 > 0`: sparse AE (L1 on the code)."""
-    reg = keras.regularizers.L1(l1) if l1 > 0 else None
-    return keras.Sequential(
-        [
-            keras.layers.Input((n_in,)),
-            keras.layers.Dense(hidden, activation="relu"),
-            keras.layers.Dense(latent, activation="relu" if l1 > 0 else None, activity_regularizer=reg, name="code"),
-            keras.layers.Dense(hidden, activation="relu"),
-            keras.layers.Dense(n_in),
-        ]
-    )
-
-
 class AE(Detector):
-    """Reconstruction-error detector. `noise > 0`: denoising AE (Gaussian noise on the input during training only)."""
+    """Reconstruction-error detector on `autoenc.build_autoencoder` (dense body). `widths`: hidden layers of the encoder
+    (the decoder mirrors them), `latent`: code size; `residual`, `norm`, `activation`: see `autoenc`; `l1 > 0`: sparse
+    AE; `noise > 0`: denoising AE. Training stops early on the held-out normal rows."""
 
-    def __init__(self, latent=8, hidden=32, l1=0.0, noise=0.0, epochs=128, seed=0, name=None):
-        self.latent, self.hidden, self.l1, self.noise, self.epochs, self.seed = latent, hidden, l1, noise, epochs, seed
-        self.name = name or ("sparse AE" if l1 else "denoising AE" if noise else "autoencoder")
+    def __init__(self, latent=8, widths=(32,), activation="silu", residual=False, norm=None, l1=0.0, noise=0.0,
+                 epochs=128, patience=8, seed=0, name=None):  # fmt: skip
+        self.latent, self.widths, self.activation, self.residual, self.norm = (
+            latent,
+            tuple(widths),
+            activation,
+            residual,
+            norm,
+        )
+        self.l1, self.noise, self.epochs, self.patience, self.seed = l1, noise, epochs, patience, seed
+        deep = f"{len(self.widths)}-layer " if len(self.widths) > 1 else ""
+        self.name = name or deep + (
+            "residual AE" if residual else "sparse AE" if l1 else "denoising AE" if noise else "autoencoder"
+        )
 
     def fit(self, X):
         keras.utils.set_random_seed(self.seed)
-        self.model = dense_ae(X.shape[1], self.latent, self.hidden, self.l1)
-        self.model.compile(optimizer=keras.optimizers.Adam(1e-3), loss="mse")
-        Xin = X + np.random.default_rng(self.seed).normal(0, self.noise, X.shape).astype(X.dtype) if self.noise else X
-        self.history = self.model.fit(Xin, X, epochs=self.epochs, batch_size=256, validation_split=0.1, verbose=0)
+        self.model = build_autoencoder((X.shape[1],), "dense", self.widths, self.latent, self.activation, self.norm,
+                                       self.residual, l1=self.l1, noise=self.noise)  # fmt: skip
+        self.history = fit_autoencoder(self.model, X, self.epochs, patience=self.patience, seed=self.seed)
         return self
 
     def score(self, X):
-        return ((self.model.predict(X, batch_size=4096, verbose=0) - X) ** 2).mean(1)
+        return reconstruction_error(self.model, X)
 
 
 # ------------------------------------------------------------------------------------------------ variational AE
@@ -162,44 +165,31 @@ def window_to_point(err_w: np.ndarray, w: int, T: int) -> np.ndarray:
     return s / np.maximum(n, 1)
 
 
-def conv_ae(w: int, d: int, filters: int = 32) -> keras.Model:
+def conv_ae(w: int, d: int, filters: int = 32, **kw) -> keras.Model:
     """1-D convolutional AE over windows (w time steps x d channels); w must be divisible by 4."""
-    return keras.Sequential(
-        [
-            keras.layers.Input((w, d)),
-            keras.layers.Conv1D(filters, 7, padding="same", strides=2, activation="relu"),
-            keras.layers.Conv1D(filters // 2, 7, padding="same", strides=2, activation="relu"),
-            keras.layers.Conv1DTranspose(filters // 2, 7, padding="same", strides=2, activation="relu"),
-            keras.layers.Conv1DTranspose(filters, 7, padding="same", strides=2, activation="relu"),
-            keras.layers.Conv1D(d, 7, padding="same"),
-        ]
+    return build_autoencoder(
+        (w, d),
+        "conv",
+        (filters, filters // 2),
+        code=kw.pop("code", None),
+        activation=kw.pop("activation", "relu"),
+        **kw,
     )
 
 
-def lstm_ae(w: int, d: int, units: int = 32) -> keras.Model:
-    """LSTM encoder -> code repeated w times -> LSTM decoder."""
-    return keras.Sequential(
-        [
-            keras.layers.Input((w, d)),
-            keras.layers.LSTM(units),
-            keras.layers.RepeatVector(w),
-            keras.layers.LSTM(units, return_sequences=True),
-            keras.layers.TimeDistributed(keras.layers.Dense(d)),
-        ]
-    )
+def lstm_ae(w: int, d: int, units: int = 32, **kw) -> keras.Model:
+    """LSTM encoder -> code repeated w times -> LSTM decoder (`kind="gru"` through build_autoencoder for a GRU)."""
+    return build_autoencoder((w, d), "lstm", (units,), code=kw.pop("code", units), **kw)
 
 
 def fit_window_ae(model: keras.Model, W: np.ndarray, epochs: int = 30, seed: int = 0) -> keras.Model:
-    keras.utils.set_random_seed(seed)
-    model.compile(optimizer=keras.optimizers.Adam(1e-3), loss="mse")
-    model.fit(W, W, epochs=epochs, batch_size=128, validation_split=0.1, verbose=0,
-              callbacks=[keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)])  # fmt: skip
+    fit_autoencoder(model, W, epochs, batch_size=128, patience=5, seed=seed)
     return model
 
 
 def window_error(model: keras.Model, W: np.ndarray, per_step: bool = True) -> np.ndarray:
     """Squared reconstruction error per window and time step (N, w), averaged over channels; per_step=False: (N,)."""
-    e = ((model.predict(W, batch_size=1024, verbose=0) - W) ** 2).mean(axis=2)
+    e = reconstruction_error(model, W, per="step")
     return e if per_step else e.mean(1)
 
 

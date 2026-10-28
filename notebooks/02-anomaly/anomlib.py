@@ -355,17 +355,23 @@ def threshold(val_scores: np.ndarray, fpr: float = 0.01) -> float:
     return float(np.quantile(val_scores, 1 - fpr))
 
 
-def evaluate(s_test: np.ndarray, y_test: np.ndarray, s_val: np.ndarray, fpr: float = 0.01) -> dict[str, float]:
-    """AUROC, AUPRC (average precision) and the confusion metrics at the validation threshold."""
-    t = threshold(s_val, fpr)
+def metrics_at(s_test: np.ndarray, y_test: np.ndarray, t: float) -> dict[str, float]:
+    """Confusion metrics of the rule `score > t`: recall, precision, F1, MCC and the false-positive rate."""
     pred = s_test > t
     tp, fp = int((pred & (y_test == 1)).sum()), int((pred & (y_test == 0)).sum())
-    fn = int((~pred & (y_test == 1)).sum())
+    fn, tn = int((~pred & (y_test == 1)).sum()), int((~pred & (y_test == 0)).sum())
     prec = tp / (tp + fp) if tp + fp else 0.0
     rec = tp / (tp + fn) if tp + fn else 0.0
+    den = np.sqrt(float(tp + fp) * (tp + fn) * (tn + fp) * (tn + fn))
+    return {"recall": rec, "precision": prec, "F1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
+            "MCC": (tp * tn - fp * fn) / den if den else 0.0, "FPR": fp / max(1, fp + tn)}  # fmt: skip
+
+
+def evaluate(s_test: np.ndarray, y_test: np.ndarray, s_val: np.ndarray, fpr: float = 0.01) -> dict[str, float]:
+    """AUROC, AUPRC (average precision) and the confusion metrics at the validation threshold."""
+    m = metrics_at(s_test, y_test, threshold(s_val, fpr))
     return {"AUROC": roc_auc_score(y_test, s_test), "AUPRC": average_precision_score(y_test, s_test),
-            "recall": rec, "precision": prec, "F1": 2 * prec * rec / (prec + rec) if prec + rec else 0.0,
-            "FPR": fp / max(1, int((y_test == 0).sum()))}  # fmt: skip
+            "recall": m["recall"], "precision": m["precision"], "F1": m["F1"], "FPR": m["FPR"]}  # fmt: skip
 
 
 def recall_by_category(s_test: np.ndarray, cats: pd.Series, s_val: np.ndarray, fpr: float = 0.01) -> dict[str, float]:
