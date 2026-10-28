@@ -21,7 +21,7 @@ header-includes:
 
 ---
 
-# The Detector Has an Opponent
+# One Routine, Three Kinds of Anomaly
 
 ## An anomaly detector faces someone who adapts
 
@@ -43,18 +43,48 @@ header-includes:
 
 * Today: play the adversary against **our own** detectors to learn what their alarms rest on.
 
+## Three kinds of anomaly, one routine
+
+<!-- defines: collective -->
+
+```{=latex}
+\begin{adjustbox}{max width=\linewidth,max totalheight=0.40\textheight,center}
+\begin{tikzpicture}[node distance=4mm]
+  \node[dfn, text width=3.6cm] (a) {\textbf{1 Point}\\one row is far from the rest\\KDD99 connections};
+  \node[dfn, text width=3.6cm, right=4mm of a] (b) {\textbf{2 Contextual}\\normal value, wrong moment\\daily NAB series};
+  \node[dfn, text width=3.6cm, right=4mm of b] (c) {\textbf{3 Collective}\\each sensor fine, the group not\\water plant};
+  \node[ok, text width=3.6cm, below=4mm of a] (a1) {\textbf{pick} the best of 03\_01 and 03\_02};
+  \node[atk, text width=3.6cm, below=4mm of a1] (a2) {\textbf{break} it};
+  \node[neu, text width=3.6cm, below=4mm of a2] (a3) {\textbf{defend} it, and price the defence};
+  \draw[arr] (a1) -- (a2); \draw[arr] (a2) -- (a3);
+\end{tikzpicture}
+\end{adjustbox}
+```
+
+* Each part runs the same routine on its own data: notebooks 07, 08 and 09.
+* The best detector is picked **by the numbers** of the earlier classes, never by the attack.
+
 ## Terminology: scope and threat model
 
-* Our models, the public KDD99 data, the synthetic Example 1 and Example 2, all offline, in **feature space**.
-* The aim is the defender's: measure robustness, find the features an alarm rests on, choose defences.
-* A result means something only with its **threat model**: goal, capability, knowledge, stage [@biggio:2013; @nist:2025].
+* Our models, public or synthetic data, offline, in **feature space**; the aim is the defender's.
+* A result means something only with its **threat model** [@biggio:2013; @nist:2025]:
 
 | Element | Question |
 |:--------------------|:----------------------------------------------------------------------|
 | goal | evasion (test time) or poisoning (training time)? |
-| capability | which features can change without changing the attack? |
+| capability | which features, sensors or values can change without changing the attack? |
 | knowledge | normal data? scores? the model itself? |
-| cost | queries, edits, rounds, slower attack |
+| cost | queries, edits, rounds, sensors owned, slower attack |
+
+# Part 1: Point Anomalies (KDD99)
+
+## Pick the best, then see how it breaks
+
+![](plots/03/point_tradeoff.pdf){width=80%}
+
+* Best by AUPRC: the 2-layer autoencoder (0.70), then the GMM (0.68).
+* It resists mimicry well (2.6% evasion); Deep SVDD is the weakest (12.1%).
+* It breaks elsewhere: its threshold and its training data.
 
 ## Constraints: an attack must stay an attack
 
@@ -63,8 +93,6 @@ header-includes:
 * **Mutable**: duration, bytes, connection counts: volume and timing.
 * An "evasion" that changes a fixed feature is a different (often harmless) connection: it does not count.
 * Feature-space results are an upper bound of what traffic can achieve [@han:2021].
-
-# Evasion
 
 ## Example 1: evasion has a price
 
@@ -88,13 +116,6 @@ header-includes:
 * No query is needed. Evasion is rare: detectors catch attacks by what they **do**, not by size.
 * The r2l and u2r rows, near the threshold, evade first.
 
-## DEMO
-
-\begin{center}
-\Huge \textbf{DEMO 07}\\[4mm]
-\Large \texttt{notebooks/02-anomaly/notebook\_07.ipynb}
-\end{center}
-
 ## Black-box search with a query budget
 
 * Per query the attacker sees a score; a random step on one mutable feature is kept if the score drops.
@@ -104,14 +125,12 @@ header-includes:
 * Share of 60 caught attacks that evade: at most 5% with the constraint; free every feature (stars) and it reaches 15-30%.
 * The **feasible region**, not the search, is the limit.
 
-## What evasion tells the defender
+## Break the threshold, not the model
 
-* A detector is as robust as the features its alarms rest on are **hard to change**.
-* r2l and u2r rows sit close to the threshold (they look like logins): they evade first.
-* Deep SVDD evades most under mimicry (0.12): a learned space can lean on features an attacker controls.
-* Spam reached 100% evasion because words were free; here the protocol itself constrains the attacker.
+![](plots/03/thr_decoys.pdf)
 
-# Poisoning
+* An ISODATA threshold (class 03\_02) follows the rows in its sample: 800 decoys cut recall from 0.85 to 0.31.
+* The quantile of clean validation rows does not move (0.72): the attacker cannot write there.
 
 ## The boiling frog
 
@@ -144,32 +163,16 @@ header-includes:
 ## DEMO
 
 \begin{center}
-\Huge \textbf{DEMO 08}\\[4mm]
-\Large \texttt{notebooks/02-anomaly/notebook\_08.ipynb}
+\Huge \textbf{DEMO 07}\\[4mm]
+\Large \texttt{notebooks/02-anomaly/notebook\_07.ipynb}
 \end{center}
 
-## Slow drift beats a per-point threshold
-
-* Example 2: the pressure sensor drifts slowly.
-* **CUSUM** [@page:1954] adds up small deviations of the residual $r_t$; alarm if $S_t>h$ (median of 5 runs, no false alarms):
-<!-- derivation: slow-drift-beats-a-per-point-threshold -->
-$$
-\begin{aligned}
-S_t=\max\big(0,\ S_{t-1}+(r_t-\mu)/\sigma-k\big) && \text{(definition)}
-\end{aligned}
-$$
-
-![](plots/03/slow_drift.pdf)
-
-# Defences and Their Price
-
-## Ensembles: fool every member at once
-
-* **Rank mean:** average the ranks of the scores. **OR:** any member alarms, each at $1\%/m$.
+## Defend: ensembles, robust features, vetting
 
 ![](plots/03/ensembles.pdf)
 
-* The rank-mean ensemble is the best clean detector of the module; its robustness lies *between* its members'.
+* **Rank mean** (average of ranks) matches the best single detector (0.69); its robustness lies *between* its members'.
+* **OR** (any member alarms, each at $1\%/m$) is stricter but adds false alarms.
 
 ## Robust features: score only what the attack needs
 
@@ -188,6 +191,75 @@ $$
 
 * 56 of 500 poison points pass the vetting; the model moves a little, then stops: the target is never accepted.
 
+# Part 2: Contextual Anomalies (Daily Series)
+
+## Pick the best: a conv AE, on a protocol
+
+![](plots/03/nab_found.pdf)
+
+* A **contextual** anomaly: normal value, wrong moment. Four NAB series, train on days 1-8, threshold from day 9.
+* Best: the conv AE finds all four with 39 false alarms; the seasonal difference finds all four but echoes (689).
+* $|x|$ and the moving std find one each.
+
+## Break it: a ramp hides an offset
+
+![](plots/03/blind_spots.pdf)
+
+* Add an offset from day 10, at once or growing over 1 or 3 days; the largest offset with no hour of alarms.
+* Step: 0.25 sd for both detectors. A 3-day ramp lifts it to 0.5 sd: a ramp has no edge to see.
+* The daily swing is 2.5 sd: the best detector tolerates a fifth of it for days.
+
+## Break it: replay yesterday
+
+![](plots/03/nab_replay.pdf)
+
+* Replay the previous normal day over the anomaly: every value is a real normal one.
+* The seasonal difference finds nothing; the conv AE flags only the seams. Detectors check consistency, not truth.
+
+## DEMO
+
+\begin{center}
+\Huge \textbf{DEMO 08}\\[4mm]
+\Large \texttt{notebooks/02-anomaly/notebook\_08.ipynb}
+\end{center}
+
+## Defend: accumulate, vote, add a second source
+
+<!-- defines: cusum -->
+
+* **CUSUM** [@page:1954] adds up small deviations $z_t$ (here the day-over-day change); alarm if $S_t>h$:
+<!-- derivation: defend-accumulate-vote-add-a-second-source -->
+$$
+\begin{aligned}
+S_t=\max\big(0,\ S_{t-1}+(z_t-\mu)/\sigma-k\big) && \text{(definition)}
+\end{aligned}
+$$
+
+* Blind spot below 0.25 sd, at the price of the noisiest alarms (213 steps); **vote** between detectors that fail differently.
+* A **replay** needs a second source of the same quantity: another sensor, a log, a person.
+
+# Part 3: Collective Anomalies (Water Plant)
+
+## Pick the best: PCA on the sensors
+
+* Eight sensors, two hidden processes; events: a spike, a **freeze** (stale value) and a **drift**.
+* Best by AUPRC: PCA reconstruction over the sensors (0.60), the only one that finds all three with 14 false alarms.
+* Conv AE over space and time (0.45) and predict-from-the-others (0.41) follow; per-sensor $|z|$ finds only the spike.
+
+## Break it: a lie that keeps the correlations
+
+![](plots/03/coordinated_lie.pdf)
+
+* The residual is linear, $\mathbf{r}=A\mathbf{x}$: the attacker shifts owned sensors to minimise $\lVert A\boldsymbol\delta\rVert$ (appendix).
+* A 2-sd lie on level: detected with 1 to 4 sensors owned, hidden (alarm 2%) with 5 of 8. No query needed.
+
+## Break it: a slow drift under a per-point threshold
+
+* The pressure sensor drifts slowly; the per-point residual stays under its threshold for hours.
+* **CUSUM** (part 2) on the residual $r_t$ fires within 2 to 10 hours (median of 5 runs, no false alarms).
+
+![](plots/03/slow_drift.pdf)
+
 ## DEMO
 
 \begin{center}
@@ -195,14 +267,21 @@ $$
 \Large \texttt{notebooks/02-anomaly/notebook\_09.ipynb}
 \end{center}
 
-## Summary: every defence has a price and an answer
+## Defend: guard sensors and accumulation
 
-| Defence | Stops | Attacker's answer | Cost |
-|:------------------|:-------------------------|:-------------------------|:---------------------|
-| OR ensemble | attacks tuned to one model | fool all members | compute, false alarms |
-| robust features | mimicry of volume, timing | change the attack | clean recall |
-| vetted retraining | boiling frog | stay in the old region | slow adaptation |
-| CUSUM | slow drift | stop drifting | delay, tuning $k,h$ |
+* A **guard** is a reading the attacker cannot write (a separate network, a second instrument).
+* With one guard the lie needs all 7 unguarded sensors; with two, 17 of the 21 guard pairs make it impossible.
+* CUSUM catches the drift within 2 to 10 hours, but adds nothing against the lie: no residual to add up.
+
+# Summary
+
+## Every defence has a price and an answer
+
+| Part | Best detector | What broke it | What helps | Cost |
+|:----------|:--------------|:------------------------------|:-------------------|:-------------------|
+| 1 point | 2-layer AE | mimicry (all features), decoys, poison | robust features, vetting, clean validation | recall |
+| 2 contextual | conv AE | ramp under 0.5 sd, replay | CUSUM of the change, second source | false alarms |
+| 3 collective | PCA residual | lie on owned sensors, drift | guards, CUSUM | unreachable instruments |
 
 * **No defence is final; each changes the price.** Report clean metrics *and* robustness.
 
@@ -212,18 +291,18 @@ $$
 
 | Notebook | Content |
 |:-------------|:-----------------------------------------------------------------------------|
-| **07** | threat model, Example 1 price, mimicry, black-box search with budget, constraints |
-| **08** | boiling frog (Mahalanobis, MCD), centre monitoring, slow drift and CUSUM |
-| **09** | ensembles, robust features, vetted retraining, summary of costs |
+| **07** | part 1: pick, Example 1 price, mimicry, black box, threshold decoys, boiling frog, defences |
+| **08** | part 2: pick, hidden offset and ramp, retraining on the offset, frozen reference |
+| **09** | part 3: pick, coordinated lie, slow drift and CUSUM, guard sensors |
 
 * **Guide** `practice/anomaly/guide_03_03`: mimicry, a budgeted black-box search, the boiling frog with and without vetting, CUSUM.
 
 ## Take-aways
 
-* An anomaly detector is attacked through its **data** (poisoning) or its **threshold** (evasion).
-* Constraints decide the outcome: features the attack needs are robust, volume and timing are not.
-* Robust statistics resist noise, not a patient adversary; vetting and monitoring the model's movement do.
-* Slow attacks need accumulated evidence (CUSUM), not per-point thresholds.
+* The best detector is not the safest: every kind of anomaly has its own weak point.
+* Point: volume and timing are cheap to fake; the threshold and the training window are part of the attack surface.
+* Contextual: a slow ramp and daily retraining teach a model any new normal; keep a frozen reference.
+* Collective: correlations are only as safe as the sensors an attacker cannot touch.
 * Measure every defence twice: on clean data and under attack.
 
 # Appendix: The Mathematics
@@ -234,6 +313,13 @@ $$
 * Multiply by 0.19: $x_1^2+1.8x_1+1\le1.75$, so $x_1^2+1.8x_1-0.75\le0$.
 * Roots: $x_1=\frac{-1.8\pm\sqrt{1.8^2+4\cdot0.75}}{2}=\frac{-1.8\pm2.498}{2}$, i.e. $-2.15$ and $0.35$.
 * The feasible sessions are $-2.15\le x_1\le0.35$: B must send less than at $x_1=1$.
+
+## The least-squares lie
+
+* A linear residual detector scores $\mathbf{r}=A(\mathbf{x}+\boldsymbol\delta)$ and alarms when $\lVert\mathbf{r}\rVert$ exceeds $t$.
+* The attacker fixes $\delta_s=\Delta$ on the target sensor and chooses $\mathbf{z}$ on the other owned sensors $C$ to minimise $\lVert A_s\Delta+A_C\mathbf{z}\rVert$.
+* The solution is $\mathbf{z}=-(A_C^\top A_C)^{-1}A_C^\top A_s\Delta$, a least-squares fit; the residual that remains is the part of $A_s\Delta$ outside the span of the owned columns.
+* With every sensor owned, $\boldsymbol\delta$ can lie inside the normal subspace and the residual vanishes.
 
 ## CUSUM as a sequential test
 

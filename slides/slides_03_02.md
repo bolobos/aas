@@ -90,16 +90,53 @@ header-includes:
 * Without activations, $\hat{\mathbf{x}}=W_2W_1\mathbf{x}$ and the best rank-$k$ map is the PCA projection $V_kV_k^\top$ [@baldi:1989].
 * The ReLU or tanh layers bend the subspace into a curved surface: the only gain over PCA.
 
-## Terminology: four variations on the autoencoder
+## Deeper: a funnel, SiLU and skip connections
+
+```{=latex}
+\begin{adjustbox}{max width=\linewidth,max totalheight=0.28\textheight,center}
+\begin{tikzpicture}[node distance=5mm]
+  \node[neu, minimum height=24mm, text width=1cm] (x) {$\mathbf{x}$\\71};
+  \node[dfn, minimum height=18mm, text width=1cm, right=of x] (a) {64};
+  \node[dfn, minimum height=12mm, text width=1cm, right=of a] (b) {32};
+  \node[ok, minimum height=7mm, text width=1cm, right=of b] (z) {$\mathbf{h}$\\8};
+  \node[dfn, minimum height=12mm, text width=1cm, right=of z] (c) {32};
+  \node[dfn, minimum height=18mm, text width=1cm, right=of c] (d) {64};
+  \node[neu, minimum height=24mm, text width=1cm, right=of d] (y) {$\hat{\mathbf{x}}$\\71};
+  \foreach \p/\q in {x/a,a/b,b/z,z/c,c/d,d/y} {\draw[arr] (\p) -- (\q);}
+  \draw[arr, dashed] (a.north) to[bend left=35] node[above, font=\scriptsize] {skip: $\mathbf{h}+F(\mathbf{h})$} (b.north);
+\end{tikzpicture}
+\end{adjustbox}
+```
+
+* **Funnel**: each layer narrows the previous one; a second hidden layer is the step that pays (next results).
+* **SiLU** $x\,\sigma(x)$ is a smooth ReLU; ASAP 2.0 uses two such layers per side [@silva:2025].
+* A **skip** adds the block input to its output; layer normalisation keeps deep stacks stable.
+
+## One function builds them all
+
+```python
+model = build_autoencoder(
+    (71,), kind="dense",          # "conv" | "lstm" | "gru" for windows
+    widths=(64, 32), code=8,      # funnel and bottleneck
+    activation="silu", norm="layer", residual=True,
+    l1=0.0, noise=0.0)            # sparse / denoising
+fit_autoencoder(model, X_normal)  # early stopping on 10% of the rows
+err = reconstruction_error(model, X)   # per row, step or feature
+```
+
+* One builder in `src/autoenc.py` serves tabular rows and windows of a series, with or without skips.
+* Training uses normal rows only; the held-out 10% stops training before the AE over-fits.
+
+## Terminology: variations on the autoencoder
 
 | Model | Change | Why |
 |:--------------|:-------------------------------------------------|:---------------------------|
+| residual AE | block $\mathbf{h}+F(\mathbf{h})$ [@he:2016] | stable deep stacks |
 | sparse AE | $+\lambda\lVert\mathbf{h}\rVert_1$ on the code | few active units, less copying |
 | denoising AE | input $\mathbf{x}+\boldsymbol\epsilon$, target $\mathbf{x}$ [@vincent:2008] | learns the shape, not the points |
 | variational AE | code is a distribution [@kingma:2014] | a density, not only a surface |
 | Deep SVDD | no decoder; pull $\phi(\mathbf{x})$ to a centre [@ruff:2018] | one-class boundary in learned space |
 
-* All four use the same protocol: train on normal rows, threshold on normal validation rows.
 
 ## Variational AE: a code with uncertainty
 
@@ -189,14 +226,13 @@ $$
 \Large \texttt{notebooks/02-anomaly/notebook\_04.ipynb}
 \end{center}
 
-## Deep detectors land in the same band
+## Depth moves the needle
 
 ![](plots/03/deep_band.pdf)
 
-* Mean of 3 seeds, default sizes (code 8), 20 epochs, 2-3 s each on a CPU.
-* The mixture still leads; the AE equals its linear twin.
-* PCA keeps the best F1 (0.637) and r2l recall (0.45).
-* Depth is no free lunch on hand-made features [@han:2022].
+* 3 seeds: a second hidden layer lifts the AE from 0.58 to 0.72, above the GMM (0.68) and PCA (0.55).
+* A third layer or skips add nothing (0.71) and cost 4x the time.
+* Sparse, denoising and variational codes hurt (0.54 to 0.59).
 
 ## How big should the code be?
 
@@ -218,6 +254,31 @@ $$
 
 * The reconstruction error is a sum over features: the largest terms name the reason.
 * A triage hint: SYN-error rates for floods, failed logins and shells for intrusions.
+
+# Where Is the Threshold?
+
+## A threshold without labels: ISODATA
+
+<!-- defines: ISODATA -->
+
+![](plots/03/thr_hist.pdf)
+
+* **ISODATA** [@ridler:1978]: start at the mean error, then $T\leftarrow\frac12(\bar e_{\le T}+\bar e_{>T})$ until it stops.
+* No label is used; ASAP 2.0 applies it to AE errors [@silva:2025]. It assumes two modes.
+
+## It needs a second mode
+
+![](plots/03/thr_base_rate.pdf)
+
+* At 1.8% attacks the log-error cut fails (F1 0.12; the quantile gets 0.60); from 10% it follows the oracle.
+* On the raw error it never works (F1 0.45): the heavy tail drags the means. Take the log.
+
+## Which rule, when?
+
+* **Quantile of clean validation errors**: stable at any base rate, but needs clean data and fixes the false-alarm rate.
+* **ISODATA on log errors**: no clean data, but only when attacks are frequent (campaigns, monitoring).
+* The paper balanced its test set by undersampling; a real network is at 1% or less.
+* Either way, the data that sets the threshold is part of the attack surface (class 03_03).
 
 # Anomalies in Time
 
@@ -251,8 +312,20 @@ $$
 ![](plots/03/nab_found.pdf)
 
 * Each cell: found or missed, then false alarms outside the NAB window.
-* The seasonal difference finds all four but echoes (~110 false alarms); the conv AE finds all four with 1 to 35.
+* The seasonal difference finds all four but echoes (~110 false alarms); the conv AE finds all four with 0 to 35.
 * An LSTM AE over 8-hour windows **misses** nojump: the window must hold the context.
+
+## Which body? Not the fanciest
+
+| Body (window) | Found of 4 | False alarms |
+|:-----------------------|:------:|:-------:|
+| conv, 2 stages, ReLU (1 day) | 4 | 10 |
+| conv, 2 stages, SiLU (1 day) | 2 | 5 |
+| residual conv, 3 stages (1 day) | 1 | 0 |
+| GRU (8 h) | 1 | 4 |
+
+* Same NAB protocol; the plain ReLU conv AE wins: a smoother or deeper body rebuilds the anomaly too.
+* ISODATA on the log score finds all four but raises 990 to 2,700 false alarms: a series is not bimodal.
 
 ## The benchmarks are telling us something
 
@@ -340,8 +413,19 @@ $$
 \end{adjustbox}
 ```
 
-* Sources: Kitsune [@mirsky:2018], GDN [@deng:2021], TranAD [@tuli:2022].
+* Sources: Kitsune [@mirsky:2018], TranAD [@tuli:2022]; GDN [@deng:2021].
 * Each brings a real idea; none removes the base rate, the threshold, or the need for baselines.
+
+## Autoencoder families in the literature
+
+| Family | Idea | Fixes |
+|:-----------------------------|:----------------------------------|:----------------------|
+| DAGMM [@zong:2018] | code and error feed a GMM | a density threshold |
+| MemAE [@gong:2019] | code = mix of stored normal prototypes | AE rebuilds anomalies |
+| USAD [@audibert:2020] | two AEs, trained adversarially | weak reconstruction gap |
+| Anom. Transformer [@xu:2022] | attention discrepancy over windows | context beyond a window |
+
+* Recurring problem: an AE that **generalises** so well it rebuilds the anomaly.
 
 ## What to take from the literature
 
@@ -356,16 +440,17 @@ $$
 
 | Notebook | Content |
 |:--------------|:----------------------------------------------------------------------------|
-| **04** | AE, sparse, denoising, variational, Deep SVDD on KDD99; code size; explanations |
-| **05** | NAB: one-liners vs conv AE vs LSTM AE; per-step scores |
+| **04** | `build_autoencoder`: deep, residual, sparse, denoising, variational, Deep SVDD on KDD99; code size; ISODATA threshold |
+| **05** | NAB: one-liners vs conv, residual conv and GRU AE; per-step scores; ISODATA on a series |
 | **06** | Example 2: per-sensor vs space vs space + time; point-adjust; attribution |
 
-* All neural models: Keras 3 on the JAX backend, CPU is enough (each notebook under 2 minutes).
-* **Guide** `practice/anomaly/guide_03_02`: an AE by hand in Keras, its PCA twin, a conv AE on NAB, baselines.
+* All neural models: Keras 3 on the JAX backend, CPU is enough (notebooks 04-05 take a few minutes).
+* **Guide** `practice/anomaly/guide_03_02`: a deep AE by hand in Keras, its PCA twin, an ISODATA threshold, a conv AE on NAB.
 
 ## Take-aways
 
-* An autoencoder is PCA with curves; Deep SVDD is a one-class boundary in a learned space.
+* An autoencoder is PCA with curves; a second hidden layer is what pays; Deep SVDD is a one-class boundary.
+* A threshold without labels (ISODATA, on log errors) works only when attacks are frequent.
 * On hand-made features, deep detectors match the classic ones; their tuning has no labels to rely on.
 * Time: score windows, localise the error per step, and beat the seasonal one-liner first.
 * Space: anomalies that break **relations** need a model of the relations (PCA, graphs, AEs over sensors).
@@ -388,17 +473,27 @@ $$
 * The AE finds the same subspace, not necessarily the same basis: $W_1$ can be any invertible mix of $V_k^\top$ [@baldi:1989].
 
 <!-- refs:begin -->
-## References
+## References (1/2)
 
 :::: {.columns}
 ::: {.column width="50%"}
 \fontsize{5.5}{6.4}\selectfont\setlength{\parskip}{2.5pt}
 
+Audibert, Julien, Pietro Michiardi, Frédéric Guyard, Sébastien Marti, and Maria A. Zuluaga. 2020. “USAD: UnSupervised Anomaly Detection on Multivariate Time Series.” ACM SIGKDD International Conference on Knowledge Discovery & Data Mining.
+
 Baldi, Pierre, and Kurt Hornik. 1989. “Neural Networks and Principal Component Analysis: Learning from Examples Without Local Minima.” Neural Networks 2 (1).
 
 Deng, Ailin, and Bryan Hooi. 2021. “Graph Neural Network-Based Anomaly Detection in Multivariate Time Series.” AAAI Conference on Artificial Intelligence.
 
+Gong, Dong, Lingqiao Liu, Vuong Le, et al. 2019. “Memorizing Normality to Detect Anomaly: Memory-Augmented Deep Autoencoder for Unsupervised Anomaly Detection.” IEEE/CVF International Conference on Computer Vision (ICCV).
+
 Han, Songqiao, Xiyang Hu, Hailiang Huang, Minqi Jiang, and Yue Zhao. 2022. “ADBench: Anomaly Detection Benchmark.” Advances in Neural Information Processing Systems (NeurIPS), Datasets and Benchmarks.
+
+He, Kaiming, Xiangyu Zhang, Shaoqing Ren, and Jian Sun. 2016. “Deep Residual Learning for Image Recognition.” IEEE Conference on Computer Vision and Pattern Recognition (CVPR).
+
+:::
+::: {.column width="50%"}
+\fontsize{5.5}{6.4}\selectfont\setlength{\parskip}{2.5pt}
 
 Kim, Siwon, Kukjin Choi, Hyun-Soo Choi, Byunghan Lee, and Sungroh Yoon. 2022. “Towards a Rigorous Evaluation of Time-Series Anomaly Detection.” AAAI Conference on Artificial Intelligence.
 
@@ -408,11 +503,18 @@ Lavin, Alexander, and Subutai Ahmad. 2015. “Evaluating Real-Time Anomaly Detec
 
 Liu, Qinghua, and John Paparrizos. 2024. “The Elephant in the Room: Towards a Reliable Time-Series Anomaly Detection Benchmark.” Advances in Neural Information Processing Systems (NeurIPS), Datasets and Benchmarks.
 
+Mirsky, Yisroel, Tomer Doitshman, Yuval Elovici, and Asaf Shabtai. 2018. “Kitsune: An Ensemble of Autoencoders for Online Network Intrusion Detection.” Network and Distributed System Security Symposium (NDSS).
+
 :::
+::::
+
+## References (2/2)
+
+:::: {.columns}
 ::: {.column width="50%"}
 \fontsize{5.5}{6.4}\selectfont\setlength{\parskip}{2.5pt}
 
-Mirsky, Yisroel, Tomer Doitshman, Yuval Elovici, and Asaf Shabtai. 2018. “Kitsune: An Ensemble of Autoencoders for Online Network Intrusion Detection.” Network and Distributed System Security Symposium (NDSS).
+Ridler, T. W., and S. Calvard. 1978. “Picture Thresholding Using an Iterative Selection Method.” IEEE Transactions on Systems, Man, and Cybernetics 8 (8): 630–32.
 
 Ruff, Lukas, Jacob R. Kauffmann, Robert A. Vandermeulen, et al. 2021. “A Unifying Review of Deep and Shallow Anomaly Detection.” Proceedings of the IEEE 109 (5).
 
@@ -420,11 +522,21 @@ Ruff, Lukas, Robert A. Vandermeulen, Nico Görnitz, et al. 2020. “Deep Semi-Su
 
 Ruff, Lukas, Robert Vandermeulen, Nico Görnitz, et al. 2018. “Deep One-Class Classification.” International Conference on Machine Learning (ICML).
 
+Silva, Catarina, João Felisberto, João Paulo Barraca, and Paulo Salvador. 2025. “ASAP 2.0: Autonomous & Proactive Detection of Malicious Applications for Privacy Quantification in 6G Network Services.” Computer Communications 237: 108145.
+
+:::
+::: {.column width="50%"}
+\fontsize{5.5}{6.4}\selectfont\setlength{\parskip}{2.5pt}
+
 Tuli, Shreshth, Giuliano Casale, and Nicholas R. Jennings. 2022. “TranAD: Deep Transformer Networks for Anomaly Detection in Multivariate Time Series Data.” Proceedings of the VLDB Endowment 15 (6).
 
 Vincent, Pascal, Hugo Larochelle, Yoshua Bengio, and Pierre-Antoine Manzagol. 2008. “Extracting and Composing Robust Features with Denoising Autoencoders.” International Conference on Machine Learning (ICML).
 
 Wu, Renjie, and Eamonn J. Keogh. 2021. “Current Time Series Anomaly Detection Benchmarks Are Flawed and Are Creating the Illusion of Progress.” IEEE Transactions on Knowledge and Data Engineering.
+
+Xu, Jiehui, Haixu Wu, Jianmin Wang, and Mingsheng Long. 2022. “Anomaly Transformer: Time Series Anomaly Detection with Association Discrepancy.” International Conference on Learning Representations (ICLR).
+
+Zong, Bo, Qi Song, Martin Renqiang Min, et al. 2018. “Deep Autoencoding Gaussian Mixture Model for Unsupervised Anomaly Detection.” International Conference on Learning Representations (ICLR).
 
 :::
 ::::
