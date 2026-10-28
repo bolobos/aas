@@ -18,21 +18,23 @@ header-includes:
 
 # Objective
 
-Build an autoencoder detector in **Keras 3 on the JAX backend** and compare it with its linear twin (PCA). See why the size of the code matters and why it cannot be tuned without labelled anomalies. Then build a windowed detector for a time series, compare it with a one-liner, and see how point-adjusted metrics inflate results.
+Build an autoencoder detector in **Keras 3 on the JAX backend** and compare it with its linear twin (PCA). See why depth and the size of the code matter and why they cannot be tuned without labelled anomalies, and choose a threshold without labels with ISODATA. Then build a windowed detector for a time series, compare it with a one-liner, and see how point-adjusted metrics inflate results.
 
 * **Lecture:** `slides/slides_03_02.pdf`; **demos:** `notebooks/02-anomaly/` 04 to 06.
 * **Notebook to complete:** `guide_03_02.ipynb` (this folder). Cells marked `TODO` are yours; `check` cells tell you whether you are right. Helpers: `notebooks/02-anomaly/anomlib.py` and `deeplib.py`.
 * **Data:** KDD Cup 99 (as in guide 03_01), NAB series `datasets/art_daily_*.csv`, Example 2 (a simulated water plant, generated).
-* **Time:** about 2 hours (suggested: A 25 min, B 25, C 30, D 15, questions 25). Training runs on a CPU (the whole notebook takes about 1 minute).
+* **Time:** about 2 hours (suggested: A 25 min, B 25, B2 10, C0 15, C 25, D 10, questions 25). Training runs on a CPU (the whole notebook takes about 1 minute).
 * **Environment:** `make venv`; Keras uses JAX (`KERAS_BACKEND=jax` is set in the first cell). No TensorFlow, no PyTorch.
 
 # Background in one page
 
-**Autoencoder.** An encoder $f$ maps $\mathbf{x}$ ($d$ values) to a code $\mathbf{h}$ ($k\ll d$), a decoder $g$ rebuilds $\hat{\mathbf{x}}=g(f(\mathbf{x}))$. Trained on normal rows to minimise $\frac1n\sum_i\lVert\mathbf{x}_i-\hat{\mathbf{x}}_i\rVert^2$; anomaly score $s(\mathbf{x})=\frac1d\lVert\mathbf{x}-\hat{\mathbf{x}}\rVert^2$. A **linear** AE learns the PCA subspace; ReLU layers let it bend.
+**Autoencoder.** An encoder $f$ maps $\mathbf{x}$ ($d$ values) to a code $\mathbf{h}$ ($k\ll d$), a decoder $g$ rebuilds $\hat{\mathbf{x}}=g(f(\mathbf{x}))$. Trained on normal rows to minimise $\frac1n\sum_i\lVert\mathbf{x}_i-\hat{\mathbf{x}}_i\rVert^2$; anomaly score $s(\mathbf{x})=\frac1d\lVert\mathbf{x}-\hat{\mathbf{x}}\rVert^2$. A **linear** AE learns the PCA subspace; non-linear layers (SiLU, $x\sigma(x)$) let it bend, and a second hidden layer (a funnel such as 64-32-code-32-64) is what pays on KDD99. The course builder `src/autoenc.py` also offers skips, normalisation and conv, LSTM and GRU bodies.
 
 **Denoising AE.** Input $\mathbf{x}+\boldsymbol\epsilon$, target $\mathbf{x}$: the model learns the shape of normal data rather than copying points.
 
 **Hyper-parameters without labels.** Code size, epochs, noise: a one-class setting has no labelled anomaly to choose them; the validation loss of *normal* data is the only honest signal.
+
+**ISODATA threshold.** Start at the mean of the errors and repeat $T\leftarrow\frac12(\bar e_{\le T}+\bar e_{>T})$ until $T$ stops moving. No label is used, but the errors must be bimodal; take the logarithm first, since the errors are heavy-tailed. Compare with the 99% quantile of normal validation scores.
 
 **Windows.** A contextual anomaly is visible only in context: score windows $\mathbf{x}_{i..i+w-1}$. With a window AE, the squared error of window $i$ at step $t$ is $e_{i,t}$; the score of step $t$ is the mean of $e_{i,t}$ over the windows that contain $t$.
 
@@ -46,6 +48,8 @@ Build an autoencoder detector in **Keras 3 on the JAX backend** and compare it w
 |:--|:------------------------------------------------------|:--------------------|
 | **A** | Implement `build_ae` and `recon_error`; train (given); compare with PCA | shapes, table |
 | **B** | Implement `sweep(codes)`: AUPRC and validation MSE per code size; denoising (given) | table |
+| **B2** | Depth: one, two and three hidden layers (given) | table |
+| **C0** | Implement `isodata`; compare with the quantile at three attack shares | assertion, table |
 | **C** | Implement `seasonal_diff` and `per_step_score`; conv AE on NAB (given) | small arrays, table |
 | **D** | Implement `point_adjust`; compare F1 for a random score | small arrays |
 
@@ -53,9 +57,11 @@ Build an autoencoder detector in **Keras 3 on the JAX backend** and compare it w
 
 # Questions
 
-1. **(A1)** Is the AE better than PCA with the same number of components? What do the ReLU layers add?
+1. **(A1)** Is the AE better than PCA with the same number of components? What do the non-linear layers add?
 2. **(B1)** Which code size has the best AUPRC, and which the lowest validation MSE? Could you have chosen the best size without the test attacks?
 3. **(B2)** Does the denoising AE help on KDD99? Why might it help more on raw signals?
+   **(B3)** What does a second hidden layer change, and what does the third add?
+   **(C0)** When does ISODATA find a good threshold and when does it fail? Why take the logarithm? Which rule would you deploy?
 4. **(C1)** Do the seasonal difference and the conv AE find the two anomalies? Where do the false alarms of the seasonal difference come from?
 5. **(C2)** Why must the window cover a whole day? What happens with a window of a few hours?
 6. **(C3)** What would you try first on a new time series: a one-liner or a deep model? Why?
