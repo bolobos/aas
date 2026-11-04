@@ -64,6 +64,13 @@ def save(f, name: str, show: bool = True, scale: float = 1.8) -> None:
     return None
 
 
+def save_png(f, path, dpi: int = 200) -> None:
+    """Write one figure as a white PNG (`dpi`, tight) at `path`, for images inside quiz questions; the figure is closed."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    f.savefig(path, transparent=False, facecolor="white", dpi=dpi, bbox_inches="tight", pad_inches=0.05)
+    plt.close(f)
+
+
 def grouped_bars(ax, groups, series, ylabel: str = "", colors=PALETTE, width: float = 0.8, ymax: float = 1.12):
     """Bars of several series side by side, one group per tick; `series` is a list of (name, values) and every bar
     carries its value."""
