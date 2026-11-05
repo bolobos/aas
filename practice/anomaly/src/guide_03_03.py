@@ -123,7 +123,7 @@ print(pl.DataFrame(rows))
 
 # <<SOL
 # %% [markdown]
-# **Answers C.** Very few: about 2% for Mahalanobis and PCA and a few percent for the AE. The evasions are mostly r2l
+# **Answers C.** Very few: about 2% for Mahalanobis and PCA and 1% for the AE. The evasions are mostly r2l
 # (and some u2r for PCA): those rows already look like normal logins and sit near the threshold. The detectors catch
 # attacks by what they *do* (SYN-error rates, flags, failed logins, root shells), features the attacker cannot change
 # without changing the attack; volume and timing carry little of the evidence.
@@ -307,4 +307,110 @@ print(pl.DataFrame(rows))
 # alarms, misses slow drifts); a larger $h$ needs more evidence (fewer false alarms, longer delay). The same idea helps
 # against the boiling frog of part E (monitor the accumulated movement of the model's centre) and against evasion by
 # many small sessions (part B: accumulate the volume per host).
+# SOL>>
+
+# %% [markdown]
+# ## Part G. Collective anomalies: a lie that keeps the correlations
+#
+# The plant of guide 03_02 has eight sensors driven by two hidden processes, so a PCA with two components models the
+# normal readings and its residual $\mathbf{r}=(I-P)\mathbf{x}$ is the anomaly score. An attacker who controls a set $C$
+# of sensors adds $\boldsymbol\delta$ with $\delta_s=\Delta$ on the target sensor and free values on the others of $C$.
+# Implement `lie(A, C, delta, s)`: return the vector $\boldsymbol\delta$ (length 8) whose free entries minimise
+# $\lVert A\boldsymbol\delta\rVert$ (a least-squares problem, `np.linalg.lstsq`).
+
+# %%
+def lie(A, C, delta, s):
+    # <<TODO
+    raise NotImplementedError
+    # TODO>>
+    # <<SOL
+    d = np.zeros(A.shape[1])
+    d[s] = delta
+    others = [c for c in C if c != s]
+    if others:
+        d[others] = np.linalg.lstsq(A[:, others], -A[:, s] * delta, rcond=None)[0]
+    return d
+    # SOL>>
+
+
+# %%
+# check and driver (given)
+from itertools import combinations
+
+from sklearn.decomposition import PCA
+
+Xn, _, _ = dl.plant(seed=0)
+Xn = (Xn - Xn.mean(0)) / Xn.std(0)
+pca = PCA(2).fit(Xn)
+A = np.eye(8) - pca.components_.T @ pca.components_
+assert np.allclose(lie(A, [1], 2.0, 1), np.eye(8)[1] * 2.0)
+assert np.linalg.norm(A @ lie(A, [1, 0, 2], 2.0, 1)) < np.linalg.norm(A @ lie(A, [1], 2.0, 1))
+score = lambda X: (((X - pca.mean_) @ A.T) ** 2).sum(1)  # noqa: E731
+t = np.quantile(score(Xn), 0.995)
+level = dl.SENSORS.index("level")
+rows = []
+for m in range(1, 9):
+    C = min(([level, *h] for h in combinations([j for j in range(8) if j != level], m - 1)),
+            key=lambda C: np.linalg.norm(A @ lie(A, C, 2.0, level)))  # fmt: skip
+    rows.append({"sensors owned": m, "alarm rate": float((score(Xn[:2000] + lie(A, C, 2.0, level)) > t).mean())})
+print(pl.DataFrame(rows))
+
+# %% [markdown]
+# **Question G1.** How many sensors must the attacker own for a 2-sd lie on the level sensor to stay under the
+# threshold? **G2.** What would make the lie impossible?
+
+# <<SOL
+# %% [markdown]
+# **Answers G.** With 1 to 4 owned sensors the 2-sd lie is detected at once (alarm rate 1.0, 0.994 with four); with 5
+# of the 8 the least-squares helpers bring the residual under the threshold (alarm rate 0.018, the clean rate is 0.005)
+# and with more it is invisible. No query was needed: the detector's own geometry gives the attack. The lie becomes
+# impossible when the attacker cannot write some readings (guards): two independent guarded sensors are enough for most
+# pairs (notebook 09, part D). Per-point checks and more training data do not help.
+# SOL>>
+
+# %% [markdown]
+# ## Part H. Contextual anomalies: a ramp under the seasonal difference
+#
+# The seasonal difference $|x_t-x_{t-288}|$ of notebook 05 compares each step with the same step a day earlier. Implement
+# `ramp(x, delta, days, start, period)`: a copy of `x` with an offset added from index `start` on, growing linearly
+# over `days` days (`days=0`: a step) up to `delta`, where one day is `period` steps.
+
+# %%
+def ramp(x, delta, days, start, period=288):
+    # <<TODO
+    raise NotImplementedError
+    # TODO>>
+    # <<SOL
+    xa = x.copy()
+    n = len(x) - start
+    xa[start:] += delta * (np.minimum(1, np.arange(n) / (days * period)) if days else 1.0)
+    return xa
+    # SOL>>
+
+
+# %%
+# check and driver (given): the clean NAB series, threshold = max seasonal difference of days 2-9 + 10%
+assert np.allclose(ramp(np.zeros(6), 2.0, 0, 3), [0, 0, 0, 2, 2, 2]) and np.allclose(ramp(np.zeros(6), 2.0, 2, 2, 1), [0, 0, 0, 1, 2, 2])
+D = dl.DAY
+tr, _ = dl.load_nab("jumpsup")
+x = (tr.value.to_numpy() - tr.value.to_numpy()[: 8 * D].mean()) / tr.value.to_numpy()[: 8 * D].std()
+sdiff = lambda v: np.r_[np.full(D, np.nan), np.abs(v[D:] - v[:-D])]  # noqa: E731
+t = np.nanmax(sdiff(x)[D : 9 * D]) * 1.1
+longest = lambda m: max((len(r) for r in "".join("1" if v else "0" for v in m).split("0")), default=0)  # noqa: E731
+rows = [{"ramp days": d, "offset (sd)": o, "longest alarm run": longest(sdiff(ramp(x, o, d, 9 * D))[9 * D :] > t)}
+        for d in (0, 3) for o in (0.5, 1, 2, 3)]  # fmt: skip
+print(pl.DataFrame(rows))
+
+# %% [markdown]
+# **Question H1.** Which offsets does the seasonal difference miss for a step, and for a 3-day ramp? **H2.** Why does a
+# model that is retrained daily on the data it accepted make this worse?
+
+# <<SOL
+# %% [markdown]
+# **Answers H.** For a step the seasonal difference misses offsets up to 0.5 sd (longest alarm run 5 steps, under the
+# hour) and sees 1 sd (137 steps); a 3-day ramp hides up to 1 sd (run 2) and 2 sd is only just seen (16 steps): a ramp
+# has no edge and its day-over-day difference stays below the limit. A model retrained daily on the data it accepted
+# makes it worse: every day's offset becomes part of the next training window, so the model's normal follows the
+# ramp (the boiling frog of part E, in a series). Accumulating the signed day-over-day change (CUSUM) or keeping a
+# frozen reference are the defences.
 # SOL>>

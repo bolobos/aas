@@ -34,19 +34,21 @@ cats = sp.test["category"]
 # %% [markdown]
 # ## Part A. An autoencoder in Keras
 #
-# Implement `build_ae(d, code, hidden)`: a `keras.Sequential` with an `Input((d,))`, a `Dense(hidden, relu)`, a
-# `Dense(code)` (the code, linear), a `Dense(hidden, relu)` and a `Dense(d)` output. Implement
+# Implement `build_ae(d, code, widths)`: a `keras.Sequential` with an `Input((d,))`, one `Dense(w, silu)` per width in
+# `widths` (the encoder, outermost first), a `Dense(code)` (the code, linear), the same widths in reverse order (the
+# decoder) and a `Dense(d)` output. The course builder, `src/autoenc.py`, adds skips, normalisation and temporal bodies;
+# here you write the plain version. Implement
 # `recon_error(model, X)`: the mean squared error **per row** (shape `(n,)`).
 
 # %%
-def build_ae(d, code=8, hidden=32):
+def build_ae(d, code=8, widths=(32,)):
     # <<TODO
     raise NotImplementedError
     # TODO>>
     # <<SOL
-    return keras.Sequential([keras.layers.Input((d,)), keras.layers.Dense(hidden, activation="relu"),
-                             keras.layers.Dense(code), keras.layers.Dense(hidden, activation="relu"),
-                             keras.layers.Dense(d)])  # fmt: skip
+    enc = [keras.layers.Dense(w, activation="silu") for w in widths]
+    dec = [keras.layers.Dense(w, activation="silu") for w in reversed(widths)]
+    return keras.Sequential([keras.layers.Input((d,)), *enc, keras.layers.Dense(code), *dec, keras.layers.Dense(d)])
     # SOL>>
 
 
@@ -63,6 +65,7 @@ def recon_error(model, X):
 # check
 m = build_ae(71)
 assert m.output_shape == (None, 71) and m.count_params() == 71 * 32 + 32 + 32 * 8 + 8 + 8 * 32 + 32 + 32 * 71 + 71
+assert build_ae(71, 8, (64, 32)).count_params() == 71 * 64 + 64 + 64 * 32 + 32 + 32 * 8 + 8 + 8 * 32 + 32 + 32 * 64 + 64 + 64 * 71 + 71
 assert recon_error(m, Xva[:10]).shape == (10,)
 print("autoencoder shape OK")
 
@@ -70,10 +73,10 @@ print("autoencoder shape OK")
 # Train it on **normal** rows only (given), and compare with the linear twin: PCA with the same number of components.
 
 # %%
-def train_ae(X, code=8, hidden=32, epochs=20, seed=0, noise=0.0):
+def train_ae(X, code=8, widths=(32,), epochs=20, seed=0, noise=0.0):
     """(given) Adam, MSE, batch 256, 10% of the rows kept for validation; noise > 0 = denoising AE."""
     keras.utils.set_random_seed(seed)
-    model = build_ae(X.shape[1], code, hidden)
+    model = build_ae(X.shape[1], code, widths)
     model.compile(optimizer=keras.optimizers.Adam(1e-3), loss="mse")
     Xin = X + np.random.default_rng(seed).normal(0, noise, X.shape).astype(X.dtype) if noise else X
     hist = model.fit(Xin, X, epochs=epochs, batch_size=256, validation_split=0.1, verbose=0)
@@ -96,12 +99,12 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# **Question A1.** Is the AE better than its linear twin? What do the ReLU layers add, and what would a linear AE learn?
+# **Question A1.** Is the AE better than its linear twin? What do the SiLU layers add, and what would a linear AE learn?
 
 # <<SOL
 # %% [markdown]
-# **Answers A.** At the same size the AE wins: AUPRC 0.54 with a code of 8 against 0.41 for PCA with 8 components.
-# The ReLU layers let it bend the 8-dimensional subspace into a curved surface that fits normal traffic better. PCA
+# **Answers A.** At the same size the AE wins: AUPRC 0.56 with a code of 8 against 0.41 for PCA with 8 components.
+# The SiLU layers let it bend the 8-dimensional subspace into a curved surface that fits normal traffic better. PCA
 # catches up when it keeps more components (95% of the variance, class 03_01: 0.55). A linear AE trained with squared
 # error learns the PCA subspace (Baldi and Hornik 1989), not necessarily the same basis.
 # SOL>>
@@ -109,7 +112,7 @@ plt.show()
 # %% [markdown]
 # ## Part B. Code size and denoising
 #
-# Implement `sweep(codes)`: for each code size train an AE with `train_ae(Xtr, code=c, hidden=max(32, 2 * c))` and
+# Implement `sweep(codes)`: for each code size train an AE with `train_ae(Xtr, code=c, widths=(max(32, 2 * c),))` and
 # return a list of dicts with the code size, the AUPRC and recall at 1% FPR (`an.evaluate`) and the last validation
 # MSE (`history["val_loss"][-1]`).
 
@@ -121,7 +124,7 @@ def sweep(codes):
     # <<SOL
     rows = []
     for c in codes:
-        model, h = train_ae(Xtr, code=c, hidden=max(32, 2 * c))
+        model, h = train_ae(Xtr, code=c, widths=(max(32, 2 * c),))
         r = an.evaluate(recon_error(model, Xte), y, recon_error(model, Xva))
         rows.append({"code": c, "AUPRC": r["AUPRC"], "recall": r["recall"], "val MSE": h["val_loss"][-1]})
     return rows
@@ -140,12 +143,92 @@ print("denoising AE (code 8, noise 0.1):", {k: round(v, 3) for k, v in an.evalua
 
 # <<SOL
 # %% [markdown]
-# **Answers B.** A code of 32 (hidden 64) gives the best AUPRC (about 0.71, above the GMM of class 03_01); 4 is too
-# small (normal rows reconstruct badly), 128 is wider than the input and starts to copy attacks too. The validation MSE
-# of normal data is lowest for the large codes, so a normal-only criterion would not pick 32: we chose it by looking at
-# the test attacks, which a one-class setting does not have. Report defaults, or tune on a separate labelled set. The
-# denoising AE (code 8) is within the seed spread of the plain AE (about 0.55): the noise regularises but does not
-# change what the bottleneck can represent.
+# **Answers B.** A code of 32 (hidden 64) gives the best AUPRC (0.73, above the GMM of class 03_01); 4 is too small
+# (normal rows reconstruct badly), 128 is wider than the input and starts to copy attacks too. In this run the
+# validation MSE of normal rows is also lowest at 32 (0.318), but that is luck of the grid: in notebook 04, with every
+# size from 2 to 128, it prefers 64 (0.303 against 0.310). A normal-only criterion points to a region, not to a
+# code, and a one-class setting has no attacks to choose with; we chose by looking at the test attacks. Report defaults,
+# or tune on a separate labelled set. The denoising AE (code 8, 0.55) is within the seed spread of the plain AE (0.56):
+# the noise regularises but does not change what the bottleneck can represent.
+# SOL>>
+
+# %% [markdown]
+# ## Part B2. Depth
+#
+# Train the AE with one, two and three hidden layers (`widths` = `(32,)`, `(64, 32)`, `(128, 64, 32)`, code 8) for 40
+# epochs, and report the AUPRC of each. (given)
+
+# %%
+res = pl.DataFrame([{"hidden layers": len(w), **an.evaluate(recon_error(m, Xte), y, recon_error(m, Xva))}
+                    for w in [(32,), (64, 32), (128, 64, 32)] for m in [train_ae(Xtr, widths=w, epochs=40)[0]]])  # fmt: skip
+print(res.select(["hidden layers", "AUROC", "AUPRC", "F1"]))
+
+# %% [markdown]
+# **Question B3.** What does a second hidden layer change, and what does the third add?
+
+# <<SOL
+# %% [markdown]
+# **Answers B2.** A second hidden layer lifts the AUPRC from 0.60 to 0.71 and the F1 from 0.58 to 0.66: the funnel
+# lets the encoder first re-express the features and only then compress. The third layer adds 0.02 (0.73), inside the
+# seed spread (notebook 04, three seeds: 0.72 against 0.71): depth pays once, then stops. Residual blocks and layer
+# normalisation (notebook 04) matter for deeper stacks, not here.
+# SOL>>
+
+# %% [markdown]
+# ## Part C0. A threshold without labels
+#
+# Implement `isodata(scores, center=np.mean, log=False)`: start at `center(scores)`, then repeat
+# `T = (center(scores[scores <= T]) + center(scores[scores > T])) / 2` until `T` moves by less than `1e-9` (at most 200
+# rounds); with `log=True` run it on `log(scores)` and return `exp(T)`. Then compare it with the 99% quantile of the
+# normal validation scores, on test samples with a growing share of attacks.
+
+# %%
+def isodata(scores, center=np.mean, log=False):
+    # <<TODO
+    raise NotImplementedError
+    # TODO>>
+    # <<SOL
+    s = np.log(np.maximum(scores, 1e-12)) if log else np.asarray(scores, dtype=float)
+    t = float(center(s))
+    for _ in range(200):
+        lo, hi = s[s <= t], s[s > t]
+        if len(lo) == 0 or len(hi) == 0:
+            break
+        new = (center(lo) + center(hi)) / 2
+        if abs(new - t) < 1e-9:
+            break
+        t = float(new)
+    return float(np.exp(t)) if log else t
+    # SOL>>
+
+
+# %%
+# check and driver (given)
+two_modes = np.r_[np.random.default_rng(0).normal(1, 0.1, 900), np.random.default_rng(1).normal(5, 0.5, 100)]
+assert 2.5 < isodata(two_modes) < 3.5
+best, _ = train_ae(Xtr, widths=(64, 32), epochs=40)
+s_te, s_va = recon_error(best, Xte), recon_error(best, Xva)
+ia, i0 = np.flatnonzero(y == 1), np.flatnonzero(y == 0)
+rows = []
+for share in [0.018, 0.1, 0.3]:
+    idx = np.r_[ia, np.random.default_rng(0).choice(i0, min(int(len(ia) * (1 - share) / share), len(i0)), replace=False)]
+    s, yy = s_te[idx], y[idx]
+    for rule, t in [("quantile 99% of normal validation", np.quantile(s_va, 0.99)), ("ISODATA, raw", isodata(s)), ("ISODATA, log", isodata(s, log=True))]:
+        rows.append({"attack share": share, "rule": rule, **{k: round(v, 2) for k, v in an.metrics_at(s, yy, t).items() if k in ("recall", "precision", "F1")}})
+print(pl.DataFrame(rows))
+
+# %% [markdown]
+# **Question C0.** When does ISODATA find a good threshold and when does it fail? Why take the logarithm? Which rule
+# would you deploy?
+
+# <<SOL
+# %% [markdown]
+# **Answers C0.** ISODATA needs two modes. At 1.8% attacks the log version fails (F1 0.12: recall 1.0 but precision
+# 0.07, the cut sits inside the normal errors); at 10% it is at 0.68 (quantile 0.84) and at 30% it is the best (0.90
+# against 0.88). On the raw error it never works (F1 about 0.47 at every share, recall 0.3): the heavy tail drags the
+# means, so take the logarithm. The quantile of clean validation scores is stable at every share, but needs clean
+# data and fixes the false-alarm rate. Deploy the quantile; use ISODATA on log errors to monitor a stream or a
+# campaign where attacks are frequent (ASAP 2.0 balanced its test set, which is why it looked good there).
 # SOL>>
 
 # %% [markdown]
